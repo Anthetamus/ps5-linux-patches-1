@@ -1402,10 +1402,10 @@ index 404179d79a9d..2d2cd06536e3 100644
  obj-$(CONFIG_PM_DEVFREQ_EVENT)		+= event/
 diff --git a/drivers/devfreq/ps5-gpufreq.c b/drivers/devfreq/ps5-gpufreq.c
 new file mode 100644
-index 000000000000..993b9c78e153
+index 000000000000..6b007ece9ca9
 --- /dev/null
 +++ b/drivers/devfreq/ps5-gpufreq.c
-@@ -0,0 +1,314 @@
+@@ -0,0 +1,322 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +
 +#include <linux/cleanup.h>
@@ -1514,8 +1514,16 @@ index 000000000000..993b9c78e153
 +
 +static int ps5_gpufreq_target(struct device *dev, unsigned long *freq, u32 flags)
 +{
-+	unsigned long mhz = *freq / 1000000UL;
++	struct dev_pm_opp *opp;
++	unsigned long mhz;
 +	u32 cur;
++
++	opp = devfreq_recommended_opp(dev, freq, flags);
++	if (IS_ERR(opp))
++		return PTR_ERR(opp);
++	dev_pm_opp_put(opp);
++
++	mhz = *freq / 1000000UL;
 +
 +	if (mhz < PS5_GFXCLK_MIN_MHZ)
 +		mhz = PS5_GFXCLK_MIN_MHZ;
