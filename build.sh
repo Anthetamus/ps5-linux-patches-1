@@ -70,7 +70,13 @@ else
   log "swap ${swap_have_kb} kB is enough for ${SWAP_GB} GB"
 fi
 
-if [ "$KERNEL_REF" = auto ]; then
+if [ "$KERNEL_REF" = latest ]; then
+  KERNEL_REF="$(git ls-remote --tags --refs "$KERNEL_REPO_MAINLINE" 'v[0-9]*' \
+    | sed -n 's|.*refs/tags/||p' | grep -E '^v[0-9]+\.[0-9]+(-rc[0-9]+)?$' \
+    | sed -E 's/^(v[0-9]+\.[0-9]+)$/\1-rc999/' | sort -V | tail -1 | sed 's/-rc999$//')" \
+    || die "cannot list tags of $KERNEL_REPO_MAINLINE"
+  [ -n "$KERNEL_REF" ] || die "no mainline tag found"
+elif [ "$KERNEL_REF" = auto ]; then
   raw="$(head -n 5 "$PATCHES_DIR/.config" | grep -m1 -oP '^# Linux/\S+ \K[0-9]+\.[0-9]+(\.[0-9]+)?(-rc[0-9]+)?')" \
     || die "cannot read kernel version from $PATCHES_DIR/.config"
   base="${raw%%-*}"
@@ -86,20 +92,38 @@ else
 fi
 log "kernel $KERNEL_REF from $KERNEL_REPO, $TARGET_LTO"
 
-if [ -d "$SRC_DIR/.git" ] && [ "$(cat "$SRC_DIR/.ci-kernel-ref" 2>/dev/null)" = "$KERNEL_REF" ]; then
-  log "reusing $SRC_DIR"
-  git -C "$SRC_DIR" checkout -- .
-  git -C "$SRC_DIR" clean -fd -e .ci-kernel-ref
-else
-  if [ -e "$SRC_DIR" ]; then
-    [ -f "$SRC_DIR/.ci-kernel-ref" ] || die "$SRC_DIR exists and was not made by this script, not deleting it"
-    rm -rf "$SRC_DIR"
+PATCH_SUM="$(sha256sum "$PATCHES_DIR/linux.patch" | cut -d' ' -f1)"
+if [ -d "$SRC_DIR/.git" ]; then
+  [ -f "$SRC_DIR/.ci-kernel-ref" ] || die "$SRC_DIR exists and was not made by this script, not touching it"
+  have_ref="$(cat "$SRC_DIR/.ci-kernel-ref")"
+  have_sum="$(cat "$SRC_DIR/.ci-patch-sum" 2>/dev/null || true)"
+  if [ "$have_ref" = "$KERNEL_REF" ] && [ "$have_sum" = "$PATCH_SUM" ]; then
+    log "reusing $SRC_DIR as is ($KERNEL_REF, same linux.patch)"
+  else
+    if [ "$have_ref" != "$KERNEL_REF" ]; then
+      log "moving $SRC_DIR from $have_ref to $KERNEL_REF, build objects are kept"
+      git -C "$SRC_DIR" remote set-url origin "$KERNEL_REPO"
+      git -C "$SRC_DIR" fetch --depth 1 origin "refs/tags/$KERNEL_REF:refs/tags/$KERNEL_REF"
+      git -C "$SRC_DIR" checkout -q -f "$KERNEL_REF"
+    else
+      log "linux.patch changed, re-applying it on $KERNEL_REF"
+      git -C "$SRC_DIR" checkout -q -f -- .
+    fi
+    git -C "$SRC_DIR" clean -q -fd -e .ci-kernel-ref -e .ci-patch-sum
+    rm -f "$SRC_DIR/.ci-patch-sum"
+    echo "$KERNEL_REF" > "$SRC_DIR/.ci-kernel-ref"
   fi
+else
+  [ -e "$SRC_DIR" ] && die "$SRC_DIR exists and is not a git tree, not touching it"
   git clone --depth 1 --branch "$KERNEL_REF" "$KERNEL_REPO" "$SRC_DIR"
   echo "$KERNEL_REF" > "$SRC_DIR/.ci-kernel-ref"
 fi
 
-git -C "$SRC_DIR" apply --exclude=Makefile "$PATCHES_DIR/linux.patch"
+if [ ! -f "$SRC_DIR/.ci-patch-sum" ]; then
+  git -C "$SRC_DIR" apply --exclude=Makefile "$PATCHES_DIR/linux.patch" \
+    || die "linux.patch does not apply on $KERNEL_REF, fix the patch first"
+  echo "$PATCH_SUM" > "$SRC_DIR/.ci-patch-sum"
+fi
 cp "$PATCHES_DIR/.config" "$SRC_DIR/.config"
 
 FW_LIST="$(grep -m1 '^CONFIG_EXTRA_FIRMWARE=' "$SRC_DIR/.config" | cut -d'"' -f2 || true)"
