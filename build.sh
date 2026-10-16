@@ -41,6 +41,37 @@ fi
 [[ "$EFI_BACKUP_KEEP" =~ ^[1-9][0-9]*$ ]] || die "EFI_BACKUP_KEEP must be 1 or more"
 [ "$JOBS" = auto ] && JOBS="$(nproc)"
 
+if [ "$DEPLOY_EFI" = y ] && [ "$EFI_DIR" = auto ]; then
+  found=()
+  while read -r src mnt _; do
+    [[ "$src" == /dev/* ]] || continue
+    mnt="$(printf '%b' "$mnt")"
+    [[ " ${found[*]} " == *" $mnt "* ]] && continue
+    if sudo test -f "$mnt/bzImage"; then
+      found+=("$mnt")
+    fi
+  done < /proc/mounts
+  EFI_DIR=""
+  if [ "${#found[@]}" -eq 1 ]; then
+    while :; do
+      read -r -p "==> boot partition is ${found[0]}, is this right? [Y/n] " ans || die "no answer"
+      case "$ans" in
+        ""|y|Y) EFI_DIR="${found[0]}"; break ;;
+        n|N) break ;;
+      esac
+    done
+  elif [ "${#found[@]}" -gt 1 ]; then
+    log "more than one partition with bzImage: ${found[*]}"
+  else
+    log "no mounted partition with bzImage found"
+  fi
+  if [ -z "$EFI_DIR" ]; then
+    read -r -p "==> path to the boot partition: " EFI_DIR || die "no answer"
+    [ -d "$EFI_DIR" ] || die "$EFI_DIR is not a directory"
+  fi
+  log "boot partition $EFI_DIR"
+fi
+
 [ -f "$PATCHES_DIR/linux.patch" ] || die "no linux.patch in $PATCHES_DIR"
 [ -f "$PATCHES_DIR/.config" ] || die "no .config in $PATCHES_DIR"
 
