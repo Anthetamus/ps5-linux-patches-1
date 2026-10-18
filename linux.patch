@@ -10740,7 +10740,7 @@ index 174580c1281a..87d0ec62b3d1 100644
  obj-$(CONFIG_USB_XHCI_PCI_RENESAS)	+= xhci-pci-renesas.o
  obj-$(CONFIG_USB_XHCI_PLATFORM) += xhci-plat-hcd.o
 diff --git a/drivers/usb/host/xhci-pci.c b/drivers/usb/host/xhci-pci.c
-index a8889081ae82..1e69098ed12b 100644
+index a8889081ae82..3c69c9bb8016 100644
 --- a/drivers/usb/host/xhci-pci.c
 +++ b/drivers/usb/host/xhci-pci.c
 @@ -19,6 +19,7 @@
@@ -10775,23 +10775,21 @@ index a8889081ae82..1e69098ed12b 100644
  	if (xhci->quirks & XHCI_RESET_ON_RESUME)
  		xhci_dbg_trace(xhci, trace_xhci_dbg_quirks,
  				"QUIRK: Resetting on resume");
-@@ -577,6 +588,15 @@ static int xhci_pci_setup(struct usb_hcd *hcd)
+@@ -577,6 +588,13 @@ static int xhci_pci_setup(struct usb_hcd *hcd)
  	/* imod_interval is the interrupt moderation value in nanoseconds. */
  	xhci->imod_interval = 40000;
  
-+#if 0
 +    if (pdev->vendor == PCI_VENDOR_ID_SONY &&
 +		pdev->device == PCI_DEVICE_ID_PS5_SALINA_XHCI) {
 +		retval = xhci_salina_init(pdev);
 +		if (retval)
 +			return retval;
 +    }
-+#endif
 +
  	retval = xhci_gen_setup(hcd, xhci_pci_quirks);
  	if (retval)
  		return retval;
-@@ -727,6 +747,11 @@ void xhci_pci_remove(struct pci_dev *dev)
+@@ -727,6 +745,11 @@ void xhci_pci_remove(struct pci_dev *dev)
  	xhci = hcd_to_xhci(pci_get_drvdata(dev));
  	set_power_d3 = xhci->quirks & XHCI_SPURIOUS_WAKEUP;
  
@@ -10803,7 +10801,7 @@ index a8889081ae82..1e69098ed12b 100644
  	xhci->xhc_state |= XHCI_STATE_REMOVING;
  
  	if (pci_choose_state(dev, PMSG_SUSPEND) == PCI_D0)
-@@ -959,6 +984,7 @@ static const struct pci_device_id pci_ids[] = {
+@@ -959,6 +982,7 @@ static const struct pci_device_id pci_ids[] = {
  	/* handle any USB 3.0 xHCI controller */
  	{ PCI_DEVICE_CLASS(PCI_CLASS_SERIAL_USB_XHCI, ~0),
  	},
