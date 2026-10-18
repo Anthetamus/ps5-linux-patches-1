@@ -10,8 +10,16 @@ Run this on the PS5.
 
 ### What you need
 
+Arch:
+
 ```bash
 sudo pacman -S --needed base-devel git bc cpio libelf clang lld llvm ccache mkinitcpio
+```
+
+Ubuntu:
+
+```bash
+sudo apt install build-essential bc bison flex libssl-dev libelf-dev libncurses-dev dwarves git clang lld llvm ccache
 ```
 
 `ccache` is only needed with `CCACHE=y` (the default).

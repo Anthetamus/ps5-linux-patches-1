@@ -41,6 +41,14 @@ fi
 [[ "$EFI_BACKUP_KEEP" =~ ^[1-9][0-9]*$ ]] || die "EFI_BACKUP_KEEP must be 1 or more"
 [ "$JOBS" = auto ] && JOBS="$(nproc)"
 
+if command -v mkinitcpio >/dev/null; then
+  INITRD_TOOL=mkinitcpio
+elif command -v update-initramfs >/dev/null; then
+  INITRD_TOOL=update-initramfs
+else
+  die "no mkinitcpio or update-initramfs found"
+fi
+
 if [ "$DEPLOY_EFI" = y ] && [ "$EFI_DIR" = auto ]; then
   found=()
   while read -r src mnt _; do
@@ -335,7 +343,13 @@ if [ -n "$WIFI_SRC" ]; then
   log "Wi-Fi modules in /usr/lib/modules/$KVER/extra/ps5-iw620"
 fi
 
-sudo mkinitcpio -k "$KVER" -g "/boot/initrd.img-$KVER"
+if [ "$INITRD_TOOL" = mkinitcpio ]; then
+  sudo mkinitcpio -k "$KVER" -g "/boot/initrd.img-$KVER"
+elif [ -e "/boot/initrd.img-$KVER" ]; then
+  sudo update-initramfs -u -k "$KVER"
+else
+  sudo update-initramfs -c -k "$KVER"
+fi
 log "initrd at /boot/initrd.img-$KVER"
 
 if [ "$DEPLOY_EFI" = y ]; then
