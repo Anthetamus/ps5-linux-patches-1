@@ -6501,10 +6501,10 @@ index 000000000000..5a53c5f719bc
 +MODULE_LICENSE("GPL");
 diff --git a/drivers/ps5/fan.c b/drivers/ps5/fan.c
 new file mode 100644
-index 000000000000..c6c64e3cc9ed
+index 000000000000..23a9e873ddb8
 --- /dev/null
 +++ b/drivers/ps5/fan.c
-@@ -0,0 +1,368 @@
+@@ -0,0 +1,407 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +
 +#include <linux/module.h>
@@ -6518,6 +6518,12 @@ index 000000000000..c6c64e3cc9ed
 +#include "autoservo_param.h"
 +
 +#define PS5_FAN_BOOT_TARGET_TEMP	80
++
++#define PS5_FAN_PARAM_OFF		4
++#define PS5_FAN_PARAM_SIZE		0x6ae
++#define PS5_FAN_PARAM_BLOCK_SIZE	0x160
++#define PS5_FAN_PARAM_BLOCK_COUNT	4
++#define PS5_FAN_PARAM_MAINSOC_OFF	0x20
 +
 +#define GDDR6_SAMSUNG		0x01
 +#define GDDR6_HYNIX		0x06
@@ -6555,15 +6561,41 @@ index 000000000000..c6c64e3cc9ed
 +{
 +	u8 buf[ICC_MSG_MAX_SIZE] = {};
 +	struct icc_msg *msg = (struct icc_msg *)buf;
++	u16 status;
++	int ret;
 +
 +	msg->service_id = ICC_SERVICE_ID_FAN;
 +	msg->msg_type = 0xe;
-+	msg->length = sizeof(*msg) + 0x6ae;
-+	memcpy(msg->data, param, 0x6ae);
++	msg->length = sizeof(*msg) + PS5_FAN_PARAM_OFF + PS5_FAN_PARAM_SIZE;
++	memcpy(msg->data + PS5_FAN_PARAM_OFF, param, PS5_FAN_PARAM_SIZE);
 +
-+	return icc_query(buf, buf);
++	ret = icc_query(buf, buf);
++	if (ret)
++		return ret;
++
++	status = get_unaligned_le16(msg->data);
++	if (status) {
++		pr_err("FanServo: EMC rejected param, status 0x%x\n", status);
++		return -EIO;
++	}
++
++	return 0;
 +}
 +EXPORT_SYMBOL(icc_fan_update_param);
++
++static void fan_param_cap_mainsoc_target(u8 *param, u16 celsius)
++{
++	u32 cap = (u32)celsius << PS5_TARGETTEMP_SHIFT;
++	int i;
++
++	for (i = 0; i < PS5_FAN_PARAM_BLOCK_COUNT; i++) {
++		u8 *t = param + i * PS5_FAN_PARAM_BLOCK_SIZE +
++			PS5_FAN_PARAM_MAINSOC_OFF;
++
++		if (get_unaligned_le32(t) > cap)
++			put_unaligned_le32(cap, t);
++	}
++}
 +
 +int icc_fan_update_autoservo_param(void)
 +{
@@ -6573,6 +6605,7 @@ index 000000000000..c6c64e3cc9ed
 +	const char *board_name = NULL;
 +	const char *gddr6_name = NULL;
 +	const u8 *param = NULL;
++	u8 *buf;
 +	int ret;
 +
 +	bootparam_get_config_board_id(&board_id);
@@ -6680,7 +6713,13 @@ index 000000000000..c6c64e3cc9ed
 +	if (!param)
 +		goto not_updated;
 +
-+	ret = icc_fan_update_param(param);
++	buf = kmemdup(param, PS5_FAN_PARAM_SIZE, GFP_KERNEL);
++	if (!buf)
++		return -ENOMEM;
++
++	fan_param_cap_mainsoc_target(buf, PS5_FAN_BOOT_TARGET_TEMP);
++	ret = icc_fan_update_param(buf);
++	kfree(buf);
 +	if (ret)
 +		pr_err("Error: %s: %d\n", __func__, ret);
 +
