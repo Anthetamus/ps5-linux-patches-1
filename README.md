@@ -4,6 +4,21 @@ Linux patches and kernel config for the PS5.
 This is a fork of [ps5-linux/ps5-linux-patches](https://github.com/ps5-linux/ps5-linux-patches).
 The patch targets mainline 7.3.
 
+## Disclaimer
+
+**This fork is for experimental work. Things can break.**
+
+Do not rename this kernel and ship it as your own fork.
+Renamed forks are not allowed right now.
+We do not need millions of renamed kernels that are the same code and claim to be optimized or faster.
+
+If you use anything from this repo, credit it.
+This work will be merged into [ps5-linux/ps5-linux-patches](https://github.com/ps5-linux/ps5-linux-patches) over time.
+
+To contribute, fork this repo and open a pull request.
+Changes do not get in any other way.
+AI generated slop will not be merged.
+
 ## Build with build.sh
 
 Run this on the PS5.
