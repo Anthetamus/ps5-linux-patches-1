@@ -32,7 +32,7 @@ cd ps5-linux-patches
 ./build.sh
 ```
 
-The script clones the latest mainline tag into `../linux`, applies the patch and builds with clang.
+The script clones the tag set in `KERNEL_REF` in `build.cfg` (now `v7.3-rc7`) into `../linux`, applies the patch and builds with clang.
 It installs the modules, backs up the boot partition to `/boot/efi-backup/<date>` and copies the new kernel and initrd there.
 The script looks for a mounted partition with `bzImage` on it and asks if it is the right one.
 Press Enter or `y` to use it. Press `n` to type the path yourself.
@@ -72,7 +72,7 @@ Then cold boot.
 
 ```bash
 git clone https://github.com/rmuxnet/ps5-linux-patches-1 ps5-linux-patches
-git clone --depth 1 --branch v7.3-rc6 https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+git clone --depth 1 --branch v7.3-rc7 https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
 cd linux
 git apply ../ps5-linux-patches/linux.patch
 cp ../ps5-linux-patches/.config .config
