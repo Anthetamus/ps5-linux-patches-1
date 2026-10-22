@@ -107,10 +107,10 @@ index dafbf581c515..791687363cbf 100644
  };
  
 diff --git a/arch/x86/kernel/cpu/amd.c b/arch/x86/kernel/cpu/amd.c
-index 54e14ed276b5..181afe236580 100644
+index 40463bad1078..218ac3b92424 100644
 --- a/arch/x86/kernel/cpu/amd.c
 +++ b/arch/x86/kernel/cpu/amd.c
-@@ -1168,6 +1168,11 @@ static void init_amd(struct cpuinfo_x86 *c)
+@@ -1172,6 +1172,11 @@ static void init_amd(struct cpuinfo_x86 *c)
  	/* AMD CPUs don't need fencing after x2APIC/TSC_DEADLINE MSR writes. */
  	clear_cpu_cap(c, X86_FEATURE_APIC_MSRS_FENCE);
  
@@ -2850,7 +2850,7 @@ index 3e7e63edc6a3..788acb9fed3d 100644
  		case 0x68:	/* Lucienne */
  		case 0x71:	/* Zen2 */
 diff --git a/drivers/iommu/amd/init.c b/drivers/iommu/amd/init.c
-index 8a410d4aa370..d16c10dff2d0 100644
+index edcc187b8f14..9fc72c14b617 100644
 --- a/drivers/iommu/amd/init.c
 +++ b/drivers/iommu/amd/init.c
 @@ -3094,6 +3094,7 @@ static void __init free_iommu_resources(void)
@@ -4425,7 +4425,7 @@ index 000000000000..91fedcca4589
 +	return 0;
 +}
 diff --git a/drivers/pci/pci.c b/drivers/pci/pci.c
-index 8cc6a89130b5..4429d4eef241 100644
+index d79d2ee4ac69..dee2e2a6102d 100644
 --- a/drivers/pci/pci.c
 +++ b/drivers/pci/pci.c
 @@ -122,7 +122,11 @@ unsigned long pci_hotplug_bus_size = DEFAULT_HOTPLUG_BUS_SIZE;
@@ -11873,10 +11873,10 @@ index 1641d879dbda..8acfe1dc3407 100644
  	 * When this quirk is set, the HCI_OP_LE_EXT_CREATE_CONN command is
  	 * disabled. This is required for the Actions Semiconductor ATS2851
 diff --git a/net/bluetooth/hci_sync.c b/net/bluetooth/hci_sync.c
-index c01c8b58d9e8..4858a368a184 100644
+index a92a81846e9d..65725be44a9d 100644
 --- a/net/bluetooth/hci_sync.c
 +++ b/net/bluetooth/hci_sync.c
-@@ -3918,6 +3918,9 @@ static int hci_read_dev_class_sync(struct hci_dev *hdev)
+@@ -3926,6 +3926,9 @@ static int hci_read_dev_class_sync(struct hci_dev *hdev)
  /* Read Local Name */
  static int hci_read_local_name_sync(struct hci_dev *hdev)
  {
@@ -11886,7 +11886,7 @@ index c01c8b58d9e8..4858a368a184 100644
  	return __hci_cmd_sync_status(hdev, HCI_OP_READ_LOCAL_NAME,
  				     0, NULL, HCI_CMD_TIMEOUT);
  }
-@@ -5107,6 +5110,12 @@ static int hci_le_set_default_phy_sync(struct hci_dev *hdev)
+@@ -5115,6 +5118,12 @@ static int hci_le_set_default_phy_sync(struct hci_dev *hdev)
  {
  	struct hci_cp_le_set_default_phy cp;
  
