@@ -2365,7 +2365,7 @@ index 0442bfcfd384..d9634611eed5 100644
  	vcn_v2_0_enable_static_power_gating(vinst);
  
 diff --git a/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.c b/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.c
-index 1b42c4606002..bc557b2ec98d 100644
+index 47a0ff2ed035..f2d72308b019 100644
 --- a/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.c
 +++ b/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.c
 @@ -87,6 +87,10 @@
@@ -2379,29 +2379,94 @@ index 1b42c4606002..bc557b2ec98d 100644
  #include <drm/drm_privacy_screen_consumer.h>
  #include <drm/display/drm_dp_mst_helper.h>
  #include <drm/display/drm_hdmi_helper.h>
-@@ -1371,7 +1375,10 @@ static int dm_hw_init(struct amdgpu_ip_block *ip_block)
+@@ -675,6 +679,11 @@ static int amdgpu_dm_init(struct amdgpu_device *adev)
+ 	if (amdgpu_dc_debug_mask & DC_SKIP_DETECTION_LT)
+ 		adev->dm.dc->debug.skip_detection_link_training = true;
+ 
++#ifdef CONFIG_X86_PS5
++	/* Link training only works during modeset. */
++	adev->dm.dc->debug.skip_detection_link_training = true;
++#endif
++
+ 	adev->dm.dc->debug.visual_confirm = amdgpu_dc_visual_confirm;
+ 
+ 	/* TODO: Remove after DP2 receiver gets proper support of Cable ID feature */
+@@ -1338,6 +1347,15 @@ static int dm_oem_i2c_hw_init(struct amdgpu_device *adev)
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_X86_PS5
++static void dm_ps5_hotplug_handler(void *data)
++{
++	struct amdgpu_display_manager *dm = data;
++
++	queue_work(system_percpu_wq, &dm->ps5_hotplug_work);
++}
++#endif
++
+ /**
+  * dm_hw_init() - Initialize DC device
+  * @ip_block: Pointer to the amdgpu_ip_block for this hw instance.
+@@ -1371,7 +1389,15 @@ static int dm_hw_init(struct amdgpu_ip_block *ip_block)
  	r = amdgpu_dm_init(adev);
  	if (r)
  		goto err_release_i2c;
-+#ifndef CONFIG_X86_PS5
-+	/* HPD is not supported. */
++#ifdef CONFIG_X86_PS5
++	/* HPD is not supported, use HDMI notifications instead. */
++	INIT_WORK(&adev->dm.ps5_hotplug_work, dm_ps5_hotplug_work_func);
++	INIT_DELAYED_WORK(&adev->dm.ps5_hdmi_resetup_work, dm_ps5_hdmi_resetup_work_func);
++	adev->dm.ps5_hdmi_resetup_until = jiffies;
++	hdmi_set_hotplug_handler(dm_ps5_hotplug_handler, &adev->dm);
++#else
  	amdgpu_dm_hpd_init(adev);
 +#endif
  
  	r = dm_oem_i2c_hw_init(adev);
  	if (r)
-@@ -1400,7 +1407,10 @@ static int dm_hw_fini(struct amdgpu_ip_block *ip_block)
+@@ -1400,7 +1426,13 @@ static int dm_hw_fini(struct amdgpu_ip_block *ip_block)
  	if (adev->dm.i2c_devres_group)
  		devres_release_group(adev->dev, adev->dm.i2c_devres_group);
  
-+#ifndef CONFIG_X86_PS5
-+	/* HPD is not supported. */
++#ifdef CONFIG_X86_PS5
++	hdmi_set_hotplug_handler(NULL, NULL);
++	cancel_work_sync(&adev->dm.ps5_hotplug_work);
++	cancel_delayed_work_sync(&adev->dm.ps5_hdmi_resetup_work);
++#else
  	amdgpu_dm_hpd_fini(adev);
 +#endif
  
  	amdgpu_dm_fini(adev);
  	return 0;
-@@ -5035,12 +5045,64 @@ static void amdgpu_dm_atomic_commit_tail(struct drm_atomic_commit *state)
+@@ -4922,6 +4954,28 @@ static void amdgpu_dm_update_hdcp(struct drm_atomic_commit *state)
+ 	}
+ }
+ 
++#ifdef CONFIG_X86_PS5
++static void dm_ps5_hdmi_enable(struct dc_stream_state *stream,
++			       const struct drm_display_mode *mode)
++{
++	int channels = 0, i;
++
++	for (i = 0; i < stream->audio_info.mode_count; i++) {
++		if (stream->audio_info.modes[i].channel_count > channels)
++			channels = stream->audio_info.modes[i].channel_count;
++	}
++
++	/* Fallback to stereo if EDID has no audio modes */
++	if (channels == 0)
++		channels = 2;
++
++	sceHdmiSetVideoConfig(mode);
++	sceHdmiDeviceSetVideoMute(0);
++	sceHdmiSetAudioConfig(channels);
++	sceHdmiSetAudioMute(0);
++}
++#endif
++
+ static int amdgpu_dm_atomic_setup_commit(struct drm_atomic_commit *state)
+ {
+ 	struct drm_crtc *crtc;
+@@ -5054,12 +5108,55 @@ static void amdgpu_dm_atomic_commit_tail(struct drm_atomic_commit *state)
  	drm_atomic_helper_update_legacy_modeset_state(dev, state);
  	drm_dp_mst_atomic_wait_for_dependencies(state);
  
@@ -2442,22 +2507,13 @@ index 1b42c4606002..bc557b2ec98d 100644
 +		    (!old_crtc_state->active ||
 +		     drm_atomic_crtc_needs_modeset(new_crtc_state))) {
 +			if (dm_new_crtc_state->stream && dc_is_dp_signal(dm_new_crtc_state->stream->signal)) {
-+				struct dc_stream_state *stream = dm_new_crtc_state->stream;
-+				int channels = 0, j;
++				dm_ps5_hdmi_enable(dm_new_crtc_state->stream, &new_crtc_state->mode);
 +
-+				for (j = 0; j < stream->audio_info.mode_count; j++) {
-+					if (stream->audio_info.modes[j].channel_count > channels)
-+						channels = stream->audio_info.modes[j].channel_count;
-+				}
-+
-+				/* Fallback to stereo if EDID has no audio modes */
-+				if (channels == 0)
-+					channels = 2;
-+
-+				sceHdmiSetVideoConfig(&new_crtc_state->mode);
-+				sceHdmiDeviceSetVideoMute(0);
-+				sceHdmiSetAudioConfig(channels);
-+				sceHdmiSetAudioMute(0);
++				/* No audio after a hotplug until it's set up again. */
++				if (time_before(jiffies, dm->ps5_hdmi_resetup_until) &&
++				    !dm->ps5_hdmi_resetup)
++					mod_delayed_work(system_percpu_wq, &dm->ps5_hdmi_resetup_work,
++							 msecs_to_jiffies(PS5_HDMI_RESETUP_DELAY_MS));
 +			}
 +		}
 +	}
@@ -2466,8 +2522,36 @@ index 1b42c4606002..bc557b2ec98d 100644
  	amdgpu_dm_update_hdcp(state);
  
  	/* Handle connector state changes */
+diff --git a/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.h b/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.h
+index 881c8d1c3cc0..884e7e4bb801 100644
+--- a/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.h
++++ b/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.h
+@@ -742,8 +742,23 @@ struct amdgpu_display_manager {
+ 	 * Buffer info for the boot time crc.
+ 	 */
+ 	struct dm_boot_time_crc_info boot_time_crc_info;
++
++#ifdef CONFIG_X86_PS5
++	struct work_struct ps5_hotplug_work;
++	struct delayed_work ps5_hdmi_resetup_work;
++	unsigned long ps5_hdmi_resetup_until;
++	bool ps5_hdmi_resetup;
++#endif
+ };
+ 
++#ifdef CONFIG_X86_PS5
++#define PS5_HDMI_RESETUP_WINDOW_MS	10000
++#define PS5_HDMI_RESETUP_DELAY_MS	500
++
++void dm_ps5_hotplug_work_func(struct work_struct *work);
++void dm_ps5_hdmi_resetup_work_func(struct work_struct *work);
++#endif
++
+ enum dsc_clock_force_state {
+ 	DSC_CLK_FORCE_DEFAULT = 0,
+ 	DSC_CLK_FORCE_ENABLE,
 diff --git a/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_connector.c b/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_connector.c
-index d386bb1475bb..c4675a2d210f 100644
+index 45a69bf43971..1a9d9fb41120 100644
 --- a/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_connector.c
 +++ b/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_connector.c
 @@ -41,6 +41,7 @@
@@ -2478,7 +2562,7 @@ index d386bb1475bb..c4675a2d210f 100644
  #include "amdgpu_dm_connector.h"
  #include "amdgpu_dm_plane.h"
  #include "amdgpu_dm_crtc.h"
-@@ -2492,6 +2493,11 @@ enum drm_mode_status amdgpu_dm_connector_mode_valid(struct drm_connector *connec
+@@ -2497,6 +2498,11 @@ enum drm_mode_status amdgpu_dm_connector_mode_valid(struct drm_connector *connec
  	 */
  	struct amdgpu_dm_connector *aconnector = to_amdgpu_dm_connector(connector);
  
@@ -2490,6 +2574,76 @@ index d386bb1475bb..c4675a2d210f 100644
  	if ((mode->flags & DRM_MODE_FLAG_INTERLACE) ||
  			(mode->flags & DRM_MODE_FLAG_DBLSCAN))
  		return result;
+@@ -3618,6 +3624,37 @@ void dm_restore_drm_connector_state(struct drm_device *dev,
+ 		dm_force_atomic_commit(&aconnector->base);
+ }
+ 
++#ifdef CONFIG_X86_PS5
++void dm_ps5_hdmi_resetup_work_func(struct work_struct *work)
++{
++	struct amdgpu_display_manager *dm =
++		container_of(to_delayed_work(work), struct amdgpu_display_manager,
++			     ps5_hdmi_resetup_work);
++	struct drm_device *dev = adev_to_drm(dm->adev);
++	struct drm_connector_list_iter iter;
++	struct drm_connector *connector;
++	struct amdgpu_crtc *acrtc;
++
++	drm_modeset_lock_all(dev);
++	dm->ps5_hdmi_resetup = true;
++
++	drm_connector_list_iter_begin(dev, &iter);
++	drm_for_each_connector_iter(connector, &iter) {
++		if (connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK ||
++		    !connector->state || !connector->encoder)
++			continue;
++
++		acrtc = to_amdgpu_crtc(connector->encoder->crtc);
++		if (acrtc && to_dm_crtc_state(acrtc->base.state)->stream)
++			dm_force_atomic_commit(connector);
++	}
++	drm_connector_list_iter_end(&iter);
++
++	dm->ps5_hdmi_resetup = false;
++	drm_modeset_unlock_all(dev);
++}
++#endif
++
+ static bool dm_edid_parser_send_cea(struct amdgpu_display_manager *dm,
+ 		unsigned int offset,
+ 		unsigned int total_length,
+diff --git a/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_irq.c b/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_irq.c
+index 74a8735168aa..0585755d4992 100644
+--- a/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_irq.c
++++ b/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_irq.c
+@@ -1443,6 +1443,27 @@ STATIC_IFN_KUNIT void handle_hpd_irq_helper(struct amdgpu_dm_connector *aconnect
+ 		}
+ 	}
+ }
++
++#ifdef CONFIG_X86_PS5
++void dm_ps5_hotplug_work_func(struct work_struct *work)
++{
++	struct amdgpu_display_manager *dm =
++		container_of(work, struct amdgpu_display_manager, ps5_hotplug_work);
++	struct drm_device *dev = adev_to_drm(dm->adev);
++	struct drm_connector_list_iter iter;
++	struct drm_connector *connector;
++
++	dm->ps5_hdmi_resetup_until = jiffies + msecs_to_jiffies(PS5_HDMI_RESETUP_WINDOW_MS);
++
++	drm_connector_list_iter_begin(dev, &iter);
++	drm_for_each_connector_iter(connector, &iter) {
++		if (connector->connector_type == DRM_MODE_CONNECTOR_DisplayPort)
++			handle_hpd_irq_helper(to_amdgpu_dm_connector(connector),
++					      DETECT_REASON_HPD);
++	}
++	drm_connector_list_iter_end(&iter);
++}
++#endif
+ EXPORT_IF_KUNIT(handle_hpd_irq_helper);
+ 
+ STATIC_IFN_KUNIT void handle_hpd_irq(void *param)
 diff --git a/drivers/gpu/drm/amd/display/dc/bios/command_table2.c b/drivers/gpu/drm/amd/display/dc/bios/command_table2.c
 index 5bca5e534277..0944d93f0a0c 100644
 --- a/drivers/gpu/drm/amd/display/dc/bios/command_table2.c
@@ -6948,15 +7102,16 @@ index 000000000000..23a9e873ddb8
 +MODULE_ALIAS("platform:ps5-fan");
 diff --git a/drivers/ps5/hdmi.c b/drivers/ps5/hdmi.c
 new file mode 100644
-index 000000000000..2ee166be6a33
+index 000000000000..a4ace5c3b098
 --- /dev/null
 +++ b/drivers/ps5/hdmi.c
-@@ -0,0 +1,1249 @@
+@@ -0,0 +1,1269 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +
 +#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 +
 +#include <linux/module.h>
++#include <linux/mutex.h>
 +#include <linux/ps5.h>
 +#include <drm/drm_edid.h>
 +
@@ -7476,9 +7631,10 @@ index 000000000000..2ee166be6a33
 +
 +void hdmiSystemResume(void)
 +{
-+	// sceSetBackToUnpluggedSequence();
-+	// sceSetBackToWaitResolutionSequence();
 +	if (hdmi_ic_type == HDMI_IC_TYPE_FLAVA3) {
++		/* Needed for audio to come back after a replug. */
++		sceSetBackToUnpluggedSequence();
++		sceSetBackToWaitResolutionSequence();
 +		i2c_cmd_4_2();
 +		// sceSetHdcpSequence1st();
 +		// sceSetHdcpSequence2nd();
@@ -8191,6 +8347,19 @@ index 000000000000..2ee166be6a33
 +	edid[0x7f] = -sum & 0xff;
 +}
 +
++static DEFINE_MUTEX(hotplug_lock);
++static void (*hotplug_handler)(void *data);
++static void *hotplug_data;
++
++void hdmi_set_hotplug_handler(void (*handler)(void *data), void *data)
++{
++	mutex_lock(&hotplug_lock);
++	hotplug_handler = handler;
++	hotplug_data = data;
++	mutex_unlock(&hotplug_lock);
++}
++EXPORT_SYMBOL(hdmi_set_hotplug_handler);
++
 +void hdmi_notification_handler(struct icc_msg *msg)
 +{
 +		if (msg->data[1] == 0x02) {
@@ -8198,6 +8367,11 @@ index 000000000000..2ee166be6a33
 +			real_edid = drm_edid_alloc(&msg->data[4], *(u16 *)&msg->data[2]);
 +			pr_info("got real edid\n");
 +			sceHdmiOutputMode();
++
++			mutex_lock(&hotplug_lock);
++			if (hotplug_handler)
++				hotplug_handler(hotplug_data);
++			mutex_unlock(&hotplug_lock);
 +		}
 +}
 +EXPORT_SYMBOL(hdmi_notification_handler);
@@ -11559,10 +11733,10 @@ index fbb62f7c3111..18edd8279773 100644
  extern void dmi_setup(void);
 diff --git a/include/linux/ps5.h b/include/linux/ps5.h
 new file mode 100644
-index 000000000000..8f57e92ae64a
+index 000000000000..cdc32417ce19
 --- /dev/null
 +++ b/include/linux/ps5.h
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,108 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +
 +#ifndef _LINUX_PS5_H
@@ -11657,6 +11831,7 @@ index 000000000000..8f57e92ae64a
 +int icc_fan_update_autoservo_param(void);
 +
 +void hdmi_notification_handler(struct icc_msg *msg);
++void hdmi_set_hotplug_handler(void (*handler)(void *data), void *data);
 +
 +void mp1_set_pm1_addr(u64 addr);
 +int mp1_set_sleep_entry(void);
