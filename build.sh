@@ -165,6 +165,16 @@ if [ ! -f "$SRC_DIR/.ci-patch-sum" ]; then
 fi
 cp "$PATCHES_DIR/.config" "$SRC_DIR/.config"
 
+if [ -d "$PATCHES_DIR/oot/mwifiex" ]; then
+  WIFI_DIR="$SRC_DIR/drivers/net/wireless/nxp-wlan"
+  rm -rf "$WIFI_DIR"
+  cp -a "$PATCHES_DIR/oot/mwifiex" "$WIFI_DIR"
+  sed -i 's/\$(CONFIG_NXP_WLAN_DRIVER)/m/g' "$WIFI_DIR/Makefile"
+  WLMK="$SRC_DIR/drivers/net/wireless/Makefile"
+  grep -q '^obj-m += nxp-wlan/' "$WLMK" || echo 'obj-m += nxp-wlan/' >> "$WLMK"
+  log "mwifiex at drivers/net/wireless/nxp-wlan, builds as part of the kernel"
+fi
+
 FW_LIST="$(grep -m1 '^CONFIG_EXTRA_FIRMWARE=' "$SRC_DIR/.config" | cut -d'"' -f2 || true)"
 for fw in $FW_LIST; do
   [ -f "$PATCHES_DIR/firmware/$fw" ] || die "firmware $fw not found in $PATCHES_DIR/firmware"
@@ -316,6 +326,7 @@ for fw in $FW_LIST; do
   log "firmware $fw built into the kernel"
 done
 
+sudo rm -rf "/lib/modules/$KVER/extra/ps5-iw620"
 if [ "$STRIP" = y ]; then
   sudo make "${MAKE_FLAGS[@]}" INSTALL_MOD_STRIP=1 modules_install
 else
@@ -326,21 +337,19 @@ sudo install -Dm644 .config "/boot/config-$KVER"
 sudo install -Dm644 System.map "/boot/System.map-$KVER"
 log "kernel at /boot/vmlinuz-$KVER"
 
-if [ -n "$WIFI_SRC" ]; then
-  [ -f "$WIFI_SRC/Makefile" ] || die "no Makefile in WIFI_SRC $WIFI_SRC"
-  WIFI_BUILD="$(dirname "$SRC_DIR")/mwifiex-build"
-  rm -rf "$WIFI_BUILD"
-  cp -a "$WIFI_SRC" "$WIFI_BUILD"
-  make -C "$WIFI_BUILD" clean >/dev/null 2>&1 || true
-  make -C "$WIFI_BUILD" -j"$JOBS" CONFIG_OBJTOOL= KERNELDIR="$SRC_DIR" ARCH=x86 LLVM=1 \
-    KCFLAGS="-march=${MARCH} -mtune=${MTUNE} -Wno-unknown-warning-option"
-  for ko in mlan.ko moal.ko; do
-    [ -f "$WIFI_BUILD/$ko" ] || die "Wi-Fi module $ko was not built"
-    [ "$STRIP" = y ] && llvm-strip --strip-debug "$WIFI_BUILD/$ko"
-    sudo install -Dm644 "$WIFI_BUILD/$ko" "/usr/lib/modules/$KVER/extra/ps5-iw620/$ko"
-  done
-  sudo depmod "$KVER"
-  log "Wi-Fi modules in /usr/lib/modules/$KVER/extra/ps5-iw620"
+if [ -d "$SRC_DIR/drivers/net/wireless/nxp-wlan" ]; then
+  MOAL_FW=nxp/pcieuartiw620_combo_v1.bin
+  MOAL_OPTS="fw_name=$MOAL_FW pcie_int_mode=1 drv_mode=1 cfg80211_wext=4 sta_name=mlan ext_scan=1 wifi_reset_config=0 sched_scan=0 ps_mode=2 auto_ds=2 amsdu_disable=1 auto_fw_reload=0"
+  sudo install -d /etc/modprobe.d
+  sudo tee /etc/modprobe.d/ps5-iw620.conf >/dev/null <<EOF
+softdep moal pre: cfg80211 mlan
+options moal $MOAL_OPTS
+EOF
+  log "modprobe config at /etc/modprobe.d/ps5-iw620.conf"
+  if [ -f "/boot/efi/lib/$MOAL_FW" ]; then
+    sudo install -Dm644 "/boot/efi/lib/$MOAL_FW" "/lib/firmware/$MOAL_FW"
+    log "firmware at /lib/firmware/$MOAL_FW"
+  fi
 fi
 
 if [ "$INITRD_TOOL" = mkinitcpio ]; then
