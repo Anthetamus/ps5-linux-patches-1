@@ -1111,10 +1111,10 @@ index 000000000000..39cc76f39e06
 +
 +#endif
 diff --git a/drivers/bluetooth/btusb.c b/drivers/bluetooth/btusb.c
-index dc7191bf4234..21baba310d05 100644
+index dc7191bf4234..a7fc587656ce 100644
 --- a/drivers/bluetooth/btusb.c
 +++ b/drivers/bluetooth/btusb.c
-@@ -69,6 +69,10 @@ static struct usb_driver btusb_driver;
+@@ -69,6 +69,11 @@ static struct usb_driver btusb_driver;
  #define BTUSB_ACTIONS_SEMI		BIT(27)
  #define BTUSB_BARROT			BIT(28)
  #define BTUSB_BROKEN_EXT_SCAN		BIT(29)
@@ -1122,10 +1122,11 @@ index dc7191bf4234..21baba310d05 100644
 +#define BTUSB_BROKEN_LE_DEFAULT_PHY	BIT(31)
 +#define BTUSB_BROKEN_READ_LOCAL_NAME	BIT(32)
 +#define BTUSB_NO_AUTOSUSPEND		BIT(33)
++#define BTUSB_HCI_IFACE_RECIPIENT   BIT(34)
  
  static const struct usb_device_id btusb_table[] = {
  	/*
-@@ -183,6 +187,14 @@ static const struct usb_device_id btusb_table[] = {
+@@ -183,12 +188,31 @@ static const struct usb_device_id btusb_table[] = {
  	{ USB_DEVICE(0x8087, 0x0a5a),
  	  .driver_info = BTUSB_INTEL_BOOT | BTUSB_BROKEN_ISOC },
  
@@ -1135,23 +1136,77 @@ index dc7191bf4234..21baba310d05 100644
 +			 BTUSB_IFNUM_0 |
 +			 BTUSB_BROKEN_LE_DEFAULT_PHY |
 +			 BTUSB_BROKEN_READ_LOCAL_NAME |
-+			 BTUSB_NO_AUTOSUSPEND },
++			 BTUSB_NO_AUTOSUSPEND |
++			 BTUSB_HCI_IFACE_RECIPIENT },
 +
  	{ }	/* Terminating entry */
  };
  
-@@ -4199,6 +4211,10 @@ static int btusb_probe(struct usb_interface *intf,
+ MODULE_DEVICE_TABLE(usb, btusb_table);
+ 
+ static const struct usb_device_id quirks_table[] = {
++
++	/* PS5 IW620 Bluetooth device */
++	{ USB_DEVICE(0x1286, 0x2059),
++	  .driver_info = BTUSB_MARVELL |
++			 BTUSB_IFNUM_0 |
++			 BTUSB_BROKEN_LE_DEFAULT_PHY |
++			 BTUSB_BROKEN_READ_LOCAL_NAME |
++			 BTUSB_NO_AUTOSUSPEND |
++			 BTUSB_HCI_IFACE_RECIPIENT },
++
+ 	/* CSR BlueCore devices */
+ 	{ USB_DEVICE(0x0a12, 0x0001), .driver_info = BTUSB_CSR },
+ 
+@@ -2186,7 +2210,13 @@ static struct urb *alloc_ctrl_urb(struct hci_dev *hdev, struct sk_buff *skb)
+ 
+ 	dr->bRequestType = data->cmdreq_type;
+ 	dr->bRequest     = data->cmdreq;
+-	dr->wIndex       = 0;
++
++	if (data->match_id->driver_info & BTUSB_HCI_IFACE_RECIPIENT)
++		dr->wIndex = __cpu_to_le16(
++			data->intf->cur_altsetting->desc.bInterfaceNumber);
++	else
++		dr->wIndex = 0;
++
+ 	dr->wValue       = 0;
+ 	dr->wLength      = __cpu_to_le16(skb->len);
+ 
+@@ -4199,6 +4229,8 @@ static int btusb_probe(struct usb_interface *intf,
  	    (intf->cur_altsetting->desc.bInterfaceNumber != 2))
  		return -ENODEV;
  
-+	if ((id->driver_info & BTUSB_IFNUM_0) &&
-+		intf->cur_altsetting->desc.bInterfaceNumber != 0)
-+		return -ENODEV;
++
 +
  	ifnum_base = intf->cur_altsetting->desc.bInterfaceNumber;
  
  	if (!id->driver_info) {
-@@ -4490,6 +4506,12 @@ static int btusb_probe(struct usb_interface *intf,
+@@ -4209,6 +4241,13 @@ static int btusb_probe(struct usb_interface *intf,
+ 			id = match;
+ 	}
+ 
++	/* Must run after the quirks_table lookup above: the generic class
++	 * entries match first and carry no driver_info.
++	 */
++	if ((id->driver_info & BTUSB_IFNUM_0) &&
++	    intf->cur_altsetting->desc.bInterfaceNumber != 0)
++		return -ENODEV;
++
+ 	if (id->driver_info & BTUSB_IGNORE)
+ 		return -ENODEV;
+ 
+@@ -4239,6 +4278,9 @@ static int btusb_probe(struct usb_interface *intf,
+ 	} else {
+ 		data->cmdreq_type = USB_TYPE_CLASS;
+ 		data->cmdreq = 0x00;
++
++		if (id->driver_info & BTUSB_HCI_IFACE_RECIPIENT)
++			data->cmdreq_type |= USB_RECIP_INTERFACE;
+ 	}
+ 
+ 	data->udev = interface_to_usbdev(intf);
+@@ -4490,6 +4532,12 @@ static int btusb_probe(struct usb_interface *intf,
  	if (id->driver_info & BTUSB_INVALID_LE_STATES)
  		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_LE_STATES);
  
@@ -1164,7 +1219,7 @@ index dc7191bf4234..21baba310d05 100644
  	if (id->driver_info & BTUSB_BROKEN_EXT_SCAN)
  		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_EXT_SCAN);
  
-@@ -4549,7 +4571,7 @@ static int btusb_probe(struct usb_interface *intf,
+@@ -4549,7 +4597,7 @@ static int btusb_probe(struct usb_interface *intf,
  			data->diag = NULL;
  	}
  
