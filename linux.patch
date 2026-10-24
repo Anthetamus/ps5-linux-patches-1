@@ -1111,7 +1111,7 @@ index 000000000000..39cc76f39e06
 +
 +#endif
 diff --git a/drivers/bluetooth/btusb.c b/drivers/bluetooth/btusb.c
-index dc7191bf4234..a7fc587656ce 100644
+index dc7191bf4234..6ebd5b7bc6c9 100644
 --- a/drivers/bluetooth/btusb.c
 +++ b/drivers/bluetooth/btusb.c
 @@ -69,6 +69,11 @@ static struct usb_driver btusb_driver;
@@ -1126,27 +1126,15 @@ index dc7191bf4234..a7fc587656ce 100644
  
  static const struct usb_device_id btusb_table[] = {
  	/*
-@@ -183,12 +188,31 @@ static const struct usb_device_id btusb_table[] = {
- 	{ USB_DEVICE(0x8087, 0x0a5a),
- 	  .driver_info = BTUSB_INTEL_BOOT | BTUSB_BROKEN_ISOC },
- 
-+       /* PS5 IW620 Bluetooth device */
-+	{ USB_DEVICE(0x1286, 0x2059),
-+	  .driver_info = BTUSB_MARVELL |
-+			 BTUSB_IFNUM_0 |
-+			 BTUSB_BROKEN_LE_DEFAULT_PHY |
-+			 BTUSB_BROKEN_READ_LOCAL_NAME |
-+			 BTUSB_NO_AUTOSUSPEND |
-+			 BTUSB_HCI_IFACE_RECIPIENT },
-+
- 	{ }	/* Terminating entry */
- };
- 
+@@ -189,6 +194,19 @@ static const struct usb_device_id btusb_table[] = {
  MODULE_DEVICE_TABLE(usb, btusb_table);
  
  static const struct usb_device_id quirks_table[] = {
 +
-+	/* PS5 IW620 Bluetooth device */
++	/* PS5 IW620 Bluetooth (Marvell-lineage). The device reports the
++	 * generic Bluetooth class, so it matches btusb_table first and the
++	 * quirks only take effect from quirks_table.
++	 */
 +	{ USB_DEVICE(0x1286, 0x2059),
 +	  .driver_info = BTUSB_MARVELL |
 +			 BTUSB_IFNUM_0 |
@@ -1158,7 +1146,7 @@ index dc7191bf4234..a7fc587656ce 100644
  	/* CSR BlueCore devices */
  	{ USB_DEVICE(0x0a12, 0x0001), .driver_info = BTUSB_CSR },
  
-@@ -2186,7 +2210,13 @@ static struct urb *alloc_ctrl_urb(struct hci_dev *hdev, struct sk_buff *skb)
+@@ -2186,7 +2204,13 @@ static struct urb *alloc_ctrl_urb(struct hci_dev *hdev, struct sk_buff *skb)
  
  	dr->bRequestType = data->cmdreq_type;
  	dr->bRequest     = data->cmdreq;
@@ -1173,7 +1161,7 @@ index dc7191bf4234..a7fc587656ce 100644
  	dr->wValue       = 0;
  	dr->wLength      = __cpu_to_le16(skb->len);
  
-@@ -4199,6 +4229,8 @@ static int btusb_probe(struct usb_interface *intf,
+@@ -4199,6 +4223,8 @@ static int btusb_probe(struct usb_interface *intf,
  	    (intf->cur_altsetting->desc.bInterfaceNumber != 2))
  		return -ENODEV;
  
@@ -1182,7 +1170,7 @@ index dc7191bf4234..a7fc587656ce 100644
  	ifnum_base = intf->cur_altsetting->desc.bInterfaceNumber;
  
  	if (!id->driver_info) {
-@@ -4209,6 +4241,13 @@ static int btusb_probe(struct usb_interface *intf,
+@@ -4209,6 +4235,13 @@ static int btusb_probe(struct usb_interface *intf,
  			id = match;
  	}
  
@@ -1196,7 +1184,7 @@ index dc7191bf4234..a7fc587656ce 100644
  	if (id->driver_info & BTUSB_IGNORE)
  		return -ENODEV;
  
-@@ -4239,6 +4278,9 @@ static int btusb_probe(struct usb_interface *intf,
+@@ -4239,6 +4272,9 @@ static int btusb_probe(struct usb_interface *intf,
  	} else {
  		data->cmdreq_type = USB_TYPE_CLASS;
  		data->cmdreq = 0x00;
@@ -1206,7 +1194,7 @@ index dc7191bf4234..a7fc587656ce 100644
  	}
  
  	data->udev = interface_to_usbdev(intf);
-@@ -4490,6 +4532,12 @@ static int btusb_probe(struct usb_interface *intf,
+@@ -4490,6 +4526,12 @@ static int btusb_probe(struct usb_interface *intf,
  	if (id->driver_info & BTUSB_INVALID_LE_STATES)
  		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_LE_STATES);
  
@@ -1219,7 +1207,7 @@ index dc7191bf4234..a7fc587656ce 100644
  	if (id->driver_info & BTUSB_BROKEN_EXT_SCAN)
  		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_EXT_SCAN);
  
-@@ -4549,7 +4597,7 @@ static int btusb_probe(struct usb_interface *intf,
+@@ -4549,7 +4591,7 @@ static int btusb_probe(struct usb_interface *intf,
  			data->diag = NULL;
  	}
  
@@ -11954,6 +11942,34 @@ index a92a81846e9d..65725be44a9d 100644
  	if (!(hdev->commands[35] & 0x20)) {
  		/* If the command is not supported it means only 1M PHY is
  		 * supported.
+diff --git a/net/bluetooth/l2cap_core.c b/net/bluetooth/l2cap_core.c
+index aaa2a1cd489a..68796c028579 100644
+--- a/net/bluetooth/l2cap_core.c
++++ b/net/bluetooth/l2cap_core.c
+@@ -4125,8 +4125,22 @@ static void l2cap_connect(struct l2cap_conn *conn, struct l2cap_cmd_hdr *cmd,
+ 
+ 	l2cap_chan_lock(pchan);
+ 
+-	/* Check if the ACL is secure enough (if not SDP) */
++	/* Check if the ACL is secure enough (if not SDP).
++	 *
++	 * Some controllers (PS5 MediaTek 0e8d:3603) deliver the remote's
++	 * L2CAP Connection Request on the bulk endpoint before the Encryption
++	 * Change event arrives on the interrupt endpoint. If a link key has
++	 * already been handed over, encryption is on its way: answer
++	 * "pending" and let l2cap_security_cfm() finish (or block) the
++	 * channel once the link is actually encrypted.
++	 */
+ 	if (psm != cpu_to_le16(L2CAP_PSM_SDP) &&
++	    !test_bit(HCI_CONN_ENCRYPT, &conn->hcon->flags) &&
++	    conn->hcon->key_type != 0xff &&
++	    (conn->info_state & L2CAP_INFO_FEAT_MASK_REQ_DONE)) {
++		BT_DBG("conn %p encryption pending, deferring psm 0x%2.2x",
++		       conn, __le16_to_cpu(psm));
++	} else if (psm != cpu_to_le16(L2CAP_PSM_SDP) &&
+ 	    (!hci_conn_check_link_mode(conn->hcon) ||
+ 	    !l2cap_check_enc_key_size(conn->hcon, pchan))) {
+ 		conn->disc_reason = HCI_ERROR_AUTH_FAILURE;
 diff --git a/scripts/setlocalversion b/scripts/setlocalversion
 index 28169d7e143b..44f516daa21d 100755
 --- a/scripts/setlocalversion
