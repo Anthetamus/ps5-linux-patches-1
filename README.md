@@ -67,7 +67,8 @@ cp build.cfg my.cfg
 
 ### Wi-Fi
 
-The Wi-Fi driver is out of tree.
+The MT7921E driver is compiled with the kernel, no changes needed.
+The IW620 Wi-Fi driver is out of tree.
 Kernel 7.3 needs a compat patch on top of [ps5-linux-mwifiex](https://github.com/ps5-linux/ps5-linux-mwifiex).
 Prepare and patch that tree first. Then set `WIFI_SRC` to it.
 If `WIFI_SRC` is empty, rebuild the Wi-Fi modules yourself after each kernel build.

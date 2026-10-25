@@ -131,13 +131,18 @@ else
 fi
 log "kernel $KERNEL_REF from $KERNEL_REPO, $TARGET_LTO"
 
-PATCH_SUM="$(sha256sum "$PATCHES_DIR/linux.patch" | cut -d' ' -f1)"
+# First the linux.patch is applied, then mediatek patch, if mediatek is selected.
+PATCHES=("$PATCHES_DIR/linux.patch")
+for p in "$PATCHES_DIR"/*.patch; do
+  [ "$p" = "$PATCHES_DIR/linux.patch" ] || PATCHES+=("$p")
+done
+PATCH_SUM="$(cat "${PATCHES[@]}" | sha256sum | cut -d' ' -f1)"
 if [ -d "$SRC_DIR/.git" ]; then
   [ -f "$SRC_DIR/.ci-kernel-ref" ] || die "$SRC_DIR exists and was not made by this script, not touching it"
   have_ref="$(cat "$SRC_DIR/.ci-kernel-ref")"
   have_sum="$(cat "$SRC_DIR/.ci-patch-sum" 2>/dev/null || true)"
   if [ "$have_ref" = "$KERNEL_REF" ] && [ "$have_sum" = "$PATCH_SUM" ]; then
-    log "reusing $SRC_DIR as is ($KERNEL_REF, same linux.patch)"
+    log "reusing $SRC_DIR as is ($KERNEL_REF, same patches)"
   else
     if [ "$have_ref" != "$KERNEL_REF" ]; then
       log "moving $SRC_DIR from $have_ref to $KERNEL_REF, build objects are kept"
@@ -145,7 +150,7 @@ if [ -d "$SRC_DIR/.git" ]; then
       git -C "$SRC_DIR" fetch --depth 1 origin "refs/tags/$KERNEL_REF:refs/tags/$KERNEL_REF"
       git -C "$SRC_DIR" checkout -q -f "$KERNEL_REF"
     else
-      log "linux.patch changed, re-applying it on $KERNEL_REF"
+      log "patches changed, re-applying them on $KERNEL_REF"
       git -C "$SRC_DIR" checkout -q -f -- .
     fi
     git -C "$SRC_DIR" clean -q -fd -e .ci-kernel-ref -e .ci-patch-sum
@@ -159,21 +164,14 @@ else
 fi
 
 if [ ! -f "$SRC_DIR/.ci-patch-sum" ]; then
-  git -C "$SRC_DIR" apply --exclude=Makefile "$PATCHES_DIR/linux.patch" \
-    || die "linux.patch does not apply on $KERNEL_REF, fix the patch first"
+  for p in "${PATCHES[@]}"; do
+    log "applying $(basename "$p")"
+    git -C "$SRC_DIR" apply --exclude=Makefile "$p" \
+      || die "$(basename "$p") does not apply on $KERNEL_REF, fix the patch first"
+  done
   echo "$PATCH_SUM" > "$SRC_DIR/.ci-patch-sum"
 fi
 cp "$PATCHES_DIR/.config" "$SRC_DIR/.config"
-
-if [ -d "$PATCHES_DIR/oot/mwifiex" ]; then
-  WIFI_DIR="$SRC_DIR/drivers/net/wireless/nxp-wlan"
-  rm -rf "$WIFI_DIR"
-  cp -a "$PATCHES_DIR/oot/mwifiex" "$WIFI_DIR"
-  sed -i 's/\$(CONFIG_NXP_WLAN_DRIVER)/m/g' "$WIFI_DIR/Makefile"
-  WLMK="$SRC_DIR/drivers/net/wireless/Makefile"
-  grep -q '^obj-m += nxp-wlan/' "$WLMK" || echo 'obj-m += nxp-wlan/' >> "$WLMK"
-  log "mwifiex at drivers/net/wireless/nxp-wlan, builds as part of the kernel"
-fi
 
 FW_LIST="$(grep -m1 '^CONFIG_EXTRA_FIRMWARE=' "$SRC_DIR/.config" | cut -d'"' -f2 || true)"
 for fw in $FW_LIST; do
@@ -275,6 +273,7 @@ if [ "$ZRAM" = y ]; then
   want ZRAM_DEF_COMP "\"$ZRAM_COMPRESSOR\""
 fi
 [ "$NTSYNC" = y ] && want NTSYNC y
+want MT7921E m
 if [ -n "$FW_LIST" ]; then
   want EXTRA_FIRMWARE "\"$FW_LIST\""
   want EXTRA_FIRMWARE_DIR "\"$PATCHES_DIR/firmware\""
@@ -326,30 +325,53 @@ for fw in $FW_LIST; do
   log "firmware $fw built into the kernel"
 done
 
-sudo rm -rf "/lib/modules/$KVER/extra/ps5-iw620"
 if [ "$STRIP" = y ]; then
   sudo make "${MAKE_FLAGS[@]}" INSTALL_MOD_STRIP=1 modules_install
 else
   sudo make "${MAKE_FLAGS[@]}" modules_install
 fi
+# Out-of-tree MediaTek modules from ps5-mt7921-wifi would override the in-tree
+# ones built above for the same kernel release.
+for d in ps5-mt7921 ps5-bt; do
+  if [ -d "/lib/modules/$KVER/updates/$d" ]; then
+    sudo rm -rf "/lib/modules/$KVER/updates/$d"
+    log "removed out-of-tree modules /lib/modules/$KVER/updates/$d"
+  fi
+done
+sudo depmod "$KVER"
+
+# udev rules and module options for the MediaTek MT7921 Wi-Fi and Bluetooth.
+for f in "$PATCHES_DIR"/system/udev/*.rules; do
+  sudo install -Dm644 "$f" "/etc/udev/rules.d/$(basename "$f")"
+done
+for f in "$PATCHES_DIR"/system/modprobe.d/*.conf; do
+  sudo install -Dm644 "$f" "/etc/modprobe.d/$(basename "$f")"
+done
+# Earlier workarounds for the same hardware, replaced by the files above.
+sudo rm -f /etc/udev/rules.d/80-disable-internal-bt.rules /etc/udev/rules.d/99-ps5-bt-fantasma.rules \
+  /etc/udev/rules.d/99-ps5-bt-phantom.rules /etc/modprobe.d/btusb-ps5.conf /etc/modprobe.d/ps5-mt7921e.conf
+log "MediaTek udev rules and module options installed"
+
 sudo install -Dm644 arch/x86/boot/bzImage "/boot/vmlinuz-$KVER"
 sudo install -Dm644 .config "/boot/config-$KVER"
 sudo install -Dm644 System.map "/boot/System.map-$KVER"
 log "kernel at /boot/vmlinuz-$KVER"
 
-if [ -d "$SRC_DIR/drivers/net/wireless/nxp-wlan" ]; then
-  MOAL_FW=nxp/pcieuartiw620_combo_v1.bin
-  MOAL_OPTS="fw_name=$MOAL_FW pcie_int_mode=1 drv_mode=1 cfg80211_wext=4 sta_name=mlan ext_scan=1 wifi_reset_config=0 sched_scan=0 ps_mode=2 auto_ds=2 amsdu_disable=1 auto_fw_reload=0"
-  sudo install -d /etc/modprobe.d
-  sudo tee /etc/modprobe.d/ps5-iw620.conf >/dev/null <<EOF
-softdep moal pre: cfg80211 mlan
-options moal $MOAL_OPTS
-EOF
-  log "modprobe config at /etc/modprobe.d/ps5-iw620.conf"
-  if [ -f "/boot/efi/lib/$MOAL_FW" ]; then
-    sudo install -Dm644 "/boot/efi/lib/$MOAL_FW" "/lib/firmware/$MOAL_FW"
-    log "firmware at /lib/firmware/$MOAL_FW"
-  fi
+if [ -n "$WIFI_SRC" ]; then
+  [ -f "$WIFI_SRC/Makefile" ] || die "no Makefile in WIFI_SRC $WIFI_SRC"
+  WIFI_BUILD="$(dirname "$SRC_DIR")/mwifiex-build"
+  rm -rf "$WIFI_BUILD"
+  cp -a "$WIFI_SRC" "$WIFI_BUILD"
+  make -C "$WIFI_BUILD" clean >/dev/null 2>&1 || true
+  make -C "$WIFI_BUILD" -j"$JOBS" CONFIG_OBJTOOL= KERNELDIR="$SRC_DIR" ARCH=x86 LLVM=1 \
+    KCFLAGS="-march=${MARCH} -mtune=${MTUNE} -Wno-unknown-warning-option"
+  for ko in mlan.ko moal.ko; do
+    [ -f "$WIFI_BUILD/$ko" ] || die "Wi-Fi module $ko was not built"
+    [ "$STRIP" = y ] && llvm-strip --strip-debug "$WIFI_BUILD/$ko"
+    sudo install -Dm644 "$WIFI_BUILD/$ko" "/usr/lib/modules/$KVER/extra/ps5-iw620/$ko"
+  done
+  sudo depmod "$KVER"
+  log "Wi-Fi modules in /usr/lib/modules/$KVER/extra/ps5-iw620"
 fi
 
 if [ "$INITRD_TOOL" = mkinitcpio ]; then
